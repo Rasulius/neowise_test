@@ -7,29 +7,126 @@
   <style>
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
-    button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    button { padding: .4rem .8rem; font: inherit; cursor: pointer; }
+    .examples { margin: .5rem 0 .75rem; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+    .examples .label { margin-right: .25rem; }
+    .examples button { padding: .25rem .5rem; font-size: .9rem; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: .375rem; }
+    .examples button:hover { background: #e5e7eb; }
+    .result { margin-top: 1rem; padding: .75rem 1rem; border: 1px solid #ddd; border-radius: .5rem; }
+    .result:empty { display: none; }
+    .result h2 { margin: 0 0 .5rem; font-size: 1rem; }
+    .result p { margin: .25rem 0; }
+    .label { font-weight: 600; }
+    .draft { white-space: pre-wrap; }
+    .manual { border-color: #d97706; background: #fffbeb; }
+    .error { border-color: #dc2626; background: #fef2f2; }
   </style>
 </head>
 <body>
   <h1>Входящие заявки</h1>
-  <form>
+  <form id="triage-form">
     <label for="message">Текст заявки</label>
-    <textarea id="message" rows="4"></textarea>
+    <div class="examples" aria-label="Тестовые примеры">
+      <span class="label">Примеры:</span>
+      <button type="button" data-example="Здравствуйте! Подскажите, когда будет доставка моего заказа?">Доставка</button>
+      <button type="button" data-example="Сколько стоит ваш тариф и есть ли скидки?">Цены</button>
+      <button type="button" data-example="Добрый день, хочу уточнить детали сотрудничества.">Другое</button>
+      <button type="button" data-example="[error] Не удалось обработать заявку">Ошибка</button>
+      <button type="button" data-example="[timeout] Долгий ответ модели">Таймаут</button>
+      <button type="button" data-example="[bad-json] Ответ не в формате JSON">Плохой JSON</button>
+      <button type="button" data-example="[bad-topic] Неизвестная тема">Плохая тема</button>
+      <button type="button" data-example="[empty-draft] Пустой черновик">Пустой черновик</button>
+      <button type="button" data-example="">Пустой ввод</button>
+    </div>
+    <textarea id="message" name="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <div id="result" class="result" aria-live="polite"></div>
   <script type="module">
-    const form = document.querySelector("form");
+    const form = document.querySelector("#triage-form");
+    const messageInput = document.querySelector("#message");
     const result = document.querySelector("#result");
+
+    const topicLabels = {
+      delivery: "Доставка",
+      pricing: "Цены",
+      other: "Другое",
+    };
+
+    document.querySelectorAll("[data-example]").forEach((button) => {
+      button.addEventListener("click", () => {
+        messageInput.value = button.dataset.example ?? "";
+        messageInput.focus();
+      });
+    });
+
+    function clearResult() {
+      result.className = "result";
+      result.replaceChildren();
+    }
+
+    function showManualReview() {
+      clearResult();
+      result.classList.add("manual");
+      const title = document.createElement("h2");
+      title.textContent = "Требуется ручной разбор";
+      const text = document.createElement("p");
+      text.textContent = "Автоматически подготовить ответ не удалось. Проверьте заявку вручную и составьте ответ самостоятельно.";
+      result.append(title, text);
+    }
+
+    function showReady(data) {
+      clearResult();
+      const title = document.createElement("h2");
+      title.textContent = "Черновик ответа";
+      const topic = document.createElement("p");
+      const topicLabel = document.createElement("span");
+      topicLabel.className = "label";
+      topicLabel.textContent = "Тема: ";
+      topic.append(topicLabel, document.createTextNode(topicLabels[data.topic] || data.topic));
+      const draftLabel = document.createElement("p");
+      const draftLabelText = document.createElement("span");
+      draftLabelText.className = "label";
+      draftLabelText.textContent = "Черновик:";
+      draftLabel.append(draftLabelText);
+      const draft = document.createElement("p");
+      draft.className = "draft";
+      draft.textContent = data.draft;
+      result.append(title, topic, draftLabel, draft);
+    }
+
+    function showInvalidInput() {
+      clearResult();
+      result.classList.add("error");
+      const title = document.createElement("h2");
+      title.textContent = "Некорректный ввод";
+      const text = document.createElement("p");
+      text.textContent = "Введите непустой текст заявки.";
+      result.append(title, text);
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      clearResult();
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: messageInput.value }),
+        });
+        const data = await reply.json();
+        if (reply.status === 400 && data.status === "invalid_input") {
+          showInvalidInput();
+          return;
+        }
+        if (data.status === "ready") {
+          showReady(data);
+          return;
+        }
+        showManualReview();
+      } catch {
+        showManualReview();
+      }
     });
   </script>
 </body>
